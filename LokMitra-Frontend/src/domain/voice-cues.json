@@ -1,0 +1,8 @@
+{
+  "credit": ["credit", "udhar", "udhār", "baaki", "baki", "बाकी", "उधार", "రుణం", "బాకీ", "rasuko", "రాసుకో", "लिखो", "likho", "gave", "sold", "ichanu", "ఇచ్చాను"],
+  "payment": ["received", "payment", "paid", "mila", "milaa", "jama", "जमा", "मिला", "मिले", "चुकाया", "दिए", "దియాడు", "ఇచ్చాడు", "ఇచ్చింది", "వచ్చాయి", "వచ్చింది", "ichadu", "ichindi", "vachayi", "vachindi"],
+  "recipientMarkers": ["ko", "को", "కు", "ki"],
+  "payerMarkers": ["ne", "ने", "nunchi", "నుంచి", "daggara", "దగ్గర", "వద్ద"],
+  "gaveToVerbs": ["diya", "दिया", "ఇచ్చాను", "ichanu", "ichchanu", "gave"],
+  "payerVerbs": ["diye", "दिए", "दिया", "ichadu", "ichindi", "ఇచ్చాడు", "ఇచ్చింది", "vachayi", "vachindi", "వచ్చాయి", "వచ్చింది", "received", "paid", "mila", "మిలా", "मिला", "jama", "जमा", "चुकाया"]
+}

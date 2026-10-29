@@ -1,0 +1,6 @@
+-r requirements.txt
+pytest>=9
+pytest-asyncio
+respx
+ruff
+pip-audit

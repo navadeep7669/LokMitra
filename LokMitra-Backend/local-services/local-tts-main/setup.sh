@@ -1,0 +1,278 @@
+#!/bin/bash
+# ============================================================
+# Local TTS service — One-step Setup Script
+# ============================================================
+# Sets up Python venv, installs dependencies,
+# downloads the model, and creates .env
+# ============================================================
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
+
+MODEL_ID="ai4bharat/indic-parler-tts"
+VENV_DIR="venv"
+ENV_FILE=".env"
+
+# ── Colors ──────────────────────────────────────────────────
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+step=0
+total_steps=6
+
+print_step() {
+    step=$((step + 1))
+    echo ""
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${BOLD}  [$step/$total_steps] $1${NC}"
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+}
+
+print_ok() {
+    echo -e "  ${GREEN}✓${NC} $1"
+}
+
+print_warn() {
+    echo -e "  ${YELLOW}!${NC} $1"
+}
+
+print_error() {
+    echo -e "  ${RED}✗${NC} $1"
+}
+
+# ── Header ──────────────────────────────────────────────────
+echo ""
+echo -e "${CYAN}╔══════════════════════════════════════════════════════╗${NC}"
+echo -e "${CYAN}║${NC}  ${BOLD}Local TTS service Server — Setup${NC}                            ${CYAN}║${NC}"
+echo -e "${CYAN}║${NC}  ai4bharat/indic-parler-tts                          ${CYAN}║${NC}"
+echo -e "${CYAN}╚══════════════════════════════════════════════════════╝${NC}"
+
+# ── Step 1: Check Python 3 ─────────────────────────────────
+print_step "Checking Python 3"
+
+if command -v python3 &>/dev/null; then
+    PY_VERSION=$(python3 --version 2>&1)
+    print_ok "Found: $PY_VERSION"
+else
+    print_warn "Python 3 not found. Attempting install via Homebrew..."
+    if command -v brew &>/dev/null; then
+        brew install python3
+        PY_VERSION=$(python3 --version 2>&1)
+        print_ok "Installed: $PY_VERSION"
+    else
+        print_error "Python 3 is required. Please install it:"
+        echo "         macOS:  brew install python3"
+        echo "         Ubuntu: sudo apt install python3 python3-venv"
+        exit 1
+    fi
+fi
+
+# ── Step 2: Detect GPU ───────────────────────────────────
+print_step "Detecting GPU"
+
+TORCH_VARIANT="cpu"
+TORCH_INDEX="https://download.pytorch.org/whl/cpu"
+DEVICE_DEFAULT="cpu"
+
+if command -v nvidia-smi &>/dev/null; then
+    GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
+    GPU_VRAM=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader 2>/dev/null | head -1)
+
+    if [ -n "$GPU_NAME" ]; then
+        CUDA_VER=$(nvidia-smi | grep -oP 'CUDA Version: \K[0-9]+\.[0-9]+' | head -1)
+        CUDA_MAJOR=$(echo "$CUDA_VER" | cut -d. -f1)
+        CUDA_MINOR=$(echo "$CUDA_VER" | cut -d. -f2)
+
+        print_ok "GPU: $GPU_NAME ($GPU_VRAM)"
+        print_ok "CUDA: $CUDA_VER"
+
+        # Map CUDA version to PyTorch index URL
+        # Available PyTorch CUDA indexes: cu118, cu121, cu124, cu126, cu128
+        if [ "$CUDA_MAJOR" -ge 13 ] || { [ "$CUDA_MAJOR" -eq 12 ] && [ "$CUDA_MINOR" -ge 8 ]; }; then
+            TORCH_VARIANT="cu128"
+        elif [ "$CUDA_MAJOR" -eq 12 ] && [ "$CUDA_MINOR" -ge 6 ]; then
+            TORCH_VARIANT="cu126"
+        elif [ "$CUDA_MAJOR" -eq 12 ] && [ "$CUDA_MINOR" -ge 4 ]; then
+            TORCH_VARIANT="cu124"
+        elif [ "$CUDA_MAJOR" -eq 12 ] && [ "$CUDA_MINOR" -ge 1 ]; then
+            TORCH_VARIANT="cu121"
+        elif [ "$CUDA_MAJOR" -eq 11 ] && [ "$CUDA_MINOR" -ge 8 ]; then
+            TORCH_VARIANT="cu118"
+        else
+            print_warn "CUDA $CUDA_VER is too old for PyTorch GPU. Falling back to CPU."
+        fi
+
+        if [ "$TORCH_VARIANT" != "cpu" ]; then
+            TORCH_INDEX="https://download.pytorch.org/whl/$TORCH_VARIANT"
+            DEVICE_DEFAULT="auto"
+            print_ok "PyTorch variant: $TORCH_VARIANT"
+
+            # python3-dev needed for torch.compile (Triton CUDA kernel compilation)
+            PY_DEV_PKG="python$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')-dev"
+            if ! dpkg -s "$PY_DEV_PKG" &>/dev/null 2>&1; then
+                echo -e "  ${CYAN}Installing $PY_DEV_PKG (needed for torch.compile)...${NC}"
+                sudo apt install -y "$PY_DEV_PKG" -q 2>/dev/null
+                print_ok "$PY_DEV_PKG"
+            else
+                print_ok "$PY_DEV_PKG already installed"
+            fi
+        fi
+    else
+        print_warn "nvidia-smi found but no GPU detected. Installing CPU-only PyTorch."
+    fi
+else
+    print_warn "No NVIDIA GPU detected. Installing CPU-only PyTorch."
+fi
+
+# ── Step 3: Create virtual environment ─────────────────────
+print_step "Creating Python virtual environment"
+
+if [ -d "$VENV_DIR" ]; then
+    print_ok "Virtual environment already exists at ./$VENV_DIR"
+else
+    python3 -m venv "$VENV_DIR"
+    print_ok "Created virtual environment at ./$VENV_DIR"
+fi
+
+# Activate
+source "$VENV_DIR/bin/activate"
+print_ok "Activated venv ($(python3 --version))"
+
+# Upgrade pip quietly
+pip install --upgrade pip -q
+print_ok "pip upgraded"
+
+# ── Step 4: Install dependencies ───────────────────────────
+print_step "Installing Python dependencies"
+
+if [ "$TORCH_VARIANT" = "cpu" ]; then
+    echo -e "  ${CYAN}Installing PyTorch (CPU)...${NC}"
+else
+    echo -e "  ${CYAN}Installing PyTorch (CUDA $TORCH_VARIANT)...${NC}"
+fi
+pip install torch --index-url "$TORCH_INDEX" -q
+print_ok "torch ($TORCH_VARIANT)"
+
+echo -e "  ${CYAN}Installing parler-tts from GitHub...${NC}"
+pip install git+https://github.com/huggingface/parler-tts.git -q
+print_ok "parler-tts"
+
+echo -e "  ${CYAN}Installing transformers, websockets, numpy, soundfile...${NC}"
+pip install transformers websockets numpy soundfile huggingface_hub -q
+print_ok "transformers, websockets, numpy, soundfile, huggingface_hub"
+
+if [ "$TORCH_VARIANT" != "cpu" ]; then
+    echo -e "  ${CYAN}Installing flash-attn (Flash Attention 2 — may take several minutes to compile)...${NC}"
+    pip install wheel psutil ninja packaging -q 2>/dev/null
+    pip install flash-attn --no-build-isolation -q 2>/dev/null && \
+        print_ok "flash-attn" || \
+        print_warn "flash-attn build failed (optional — SDPA will be used instead)"
+fi
+
+# ── Step 5: Download model ─────────────────────────────────
+print_step "Downloading Indic Parler-TTS model"
+
+# This model is NOT gated — no HuggingFace login required
+if python3 -c "
+from parler_tts import ParlerTTSForConditionalGeneration
+ParlerTTSForConditionalGeneration.from_pretrained('$MODEL_ID', local_files_only=True)
+" &>/dev/null 2>&1; then
+    CACHE_SIZE=$(du -sh ~/.cache/huggingface/hub/models--ai4bharat--indic-parler-tts 2>/dev/null | cut -f1)
+    print_ok "Model already cached ($CACHE_SIZE)"
+else
+    echo -e "  ${CYAN}Downloading $MODEL_ID (~4-6 GB)...${NC}"
+    echo -e "  ${CYAN}This may take several minutes depending on your connection.${NC}"
+    echo ""
+
+    python3 -c "
+from parler_tts import ParlerTTSForConditionalGeneration
+from transformers import AutoTokenizer
+print('Downloading model...')
+model = ParlerTTSForConditionalGeneration.from_pretrained('$MODEL_ID')
+print('Downloading tokenizers...')
+tokenizer = AutoTokenizer.from_pretrained('$MODEL_ID')
+desc_tokenizer = AutoTokenizer.from_pretrained(model.config.text_encoder._name_or_path)
+print()
+"
+    if [ $? -eq 0 ]; then
+        CACHE_SIZE=$(du -sh ~/.cache/huggingface/hub/models--ai4bharat--indic-parler-tts 2>/dev/null | cut -f1)
+        print_ok "Model downloaded ($CACHE_SIZE)"
+    else
+        print_error "Model download failed."
+        echo ""
+        echo "  Check your internet connection and try again."
+        exit 1
+    fi
+fi
+
+# ── Step 6: Create .env and run.sh ─────────────────────────
+print_step "Creating config files"
+
+if [ -f "$ENV_FILE" ]; then
+    print_ok ".env already exists (keeping existing)"
+else
+    cat > "$ENV_FILE" <<EOF
+LOCAL_TTS_HOST=127.0.0.1
+LOCAL_TTS_PORT=8092
+LOCAL_TTS_DEVICE=$DEVICE_DEFAULT
+LOCAL_TTS_CACHE_SIZE=200
+EOF
+    print_ok "Created .env"
+fi
+
+if [ -f "run.sh" ]; then
+    print_ok "run.sh already exists (keeping existing)"
+else
+    cat > run.sh <<'SCRIPT'
+#!/bin/bash
+set -e
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
+if [ -f .env ]; then
+    export $(grep -v '^#' .env | xargs)
+fi
+source venv/bin/activate
+python3 local_tts_server.py
+SCRIPT
+    chmod +x run.sh
+    print_ok "Created run.sh"
+fi
+
+# ── Done ────────────────────────────────────────────────────
+echo ""
+echo -e "${GREEN}╔══════════════════════════════════════════════════════╗${NC}"
+echo -e "${GREEN}║${NC}  ${BOLD}Setup complete!${NC}                                     ${GREEN}║${NC}"
+echo -e "${GREEN}╚══════════════════════════════════════════════════════╝${NC}"
+echo ""
+echo -e "  ${BOLD}To start the server:${NC}"
+echo "    ./run.sh"
+echo ""
+echo -e "  ${BOLD}To test in browser:${NC}"
+echo "    open test.html"
+echo ""
+echo -e "  ${BOLD}Server will listen on:${NC}"
+echo "    ws://127.0.0.1:8092"
+echo ""
+echo -e "  ${BOLD}Config:${NC}"
+echo "    .env          — Server settings"
+echo "    run.sh        — Start script"
+echo "    test.html     — Browser test client"
+echo ""
+if [ "$TORCH_VARIANT" != "cpu" ]; then
+    echo -e "  ${BOLD}Device:${NC}"
+    echo "    $GPU_NAME ($GPU_VRAM) — CUDA via $TORCH_VARIANT"
+    echo ""
+else
+    echo -e "  ${BOLD}Device:${NC}"
+    echo "    CPU (no NVIDIA GPU detected)"
+    echo ""
+fi
+echo -e "  Model cached at:"
+echo "    ~/.cache/huggingface/hub/models--ai4bharat--indic-parler-tts"
+echo ""
